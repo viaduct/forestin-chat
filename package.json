@@ -1,0 +1,37 @@
+{
+  "name": "chat-server",
+  "version": "0.1.0",
+  "license": "unspecified",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "type-check:watch": "npm run type-check -- --watch",
+    "build": "npm run build:types && npm run build:js",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build:js": "babel src --out-dir lib --extensions \".ts,.tsx\" --source-maps inline",
+    "bnr": "npm run build && nodejs lib/index.js",
+    "start": "babel-node -x \".ts\" src/index.ts"
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.8.3",
+    "@babel/core": "^7.8.3",
+    "@babel/node": "^7.10.1",
+    "@babel/plugin-proposal-class-properties": "^7.8.3",
+    "@babel/preset-env": "^7.8.3",
+    "@babel/preset-typescript": "^7.8.3",
+    "typescript": "^3.7.5"
+  },
+  "dependencies": {
+    "@types/ioredis": "^4.16.3",
+    "@types/mongoose": "^5.7.21",
+    "apollo-server-express": "^2.14.1",
+    "express": "^4.17.1",
+    "graphql": "^15.0.0",
+    "graphql-depth-limit": "^1.1.0",
+    "graphql-redis-subscriptions": "^2.2.1",
+    "graphql-subscriptions": "^1.1.0",
+    "graphql-upload": "^11.0.0",
+    "graphql-validation-complexity": "^0.3.0",
+    "ioredis": "^4.17.3",
+    "mongodb": "^3.5.8"
+  }
+}
