@@ -1,5 +1,4 @@
 import Mongo from "mongodb";
-import Aws from "aws-sdk";
 
 type Id = Mongo.ObjectId;
 interface MongoObj
@@ -12,8 +11,28 @@ export interface Room extends MongoObj
     lastPostedAt?: Date;
     issuedDate?: Date;
 }
+export enum MsgBodyKind
+{
+    Text, Blob
+}
+export interface MsgBody
+{
+    msgBodyKind: MsgBodyKind;
+}
+export interface MsgBodyText extends MsgBody
+{
+    msgBodyKind: MsgBodyKind.Text;
+    text: string;
+}
+export interface MsgBodyBlob extends MsgBody
+{
+    msgBodyKind: MsgBodyKind.Blob;
+    blobId: Id;
+    mime: string;
+}
 export interface Msg extends MongoObj
 {
+    body?: MsgBody;
     text?: string;
     belongsTo?: Id;
     lastModifiedAt?: Date;
@@ -52,6 +71,7 @@ export async function createRoom({db}: any): Promise<Room>
 export async function destroyRoom({db, roomId}: any): Promise<void>
 {
     await db.collection(roomCollecName).deleteOne({_id: roomId});
+    await db.collection(msgCollecName).deleteMany({belongsTo: roomId});
 }
 
 export async function addMembers({db, roomId, memberIds}: any): Promise<void>
@@ -114,10 +134,54 @@ export async function removeMembers({db, roomId, memberIds}: any): Promise<void>
 
 export async function postMsg({db, roomId, userId, msgBody}: any): Promise<Msg>
 {
+    const wrappedMsgBody: MsgBodyText = {
+        msgBodyKind: MsgBodyKind.Text,
+        text: msgBody,
+    };
+    return postAbsMsg({db, roomId, userId, wrappedMsgBody});
+}
+
+export async function uploadAndPostBlobMsg({db, s3, roomId, userId, mime, stream}: any): Promise<Msg>
+{
+    // Upload file first.
+    let blobId: Id;
+    {
+        // Register
+        const blob: Blob = await registerBlob({db, mime});
+
+        // Upload
+        await uploadBlob({
+            db: db,
+            s3: s3,
+            id: blob.id,
+            stream: stream,
+        });
+
+        // Use
+        incBlobRefCount({
+            db: db,
+            id: blob.id,
+        });
+
+        blobId = blob.id as Id;
+    }
+
+    // Post the msg.
+    const msgBody: MsgBodyBlob = {
+        msgBodyKind: MsgBodyKind.Blob,
+        blobId: blobId,
+        mime: mime,
+    };
+
+    return await postAbsMsg({db, roomId, userId, msgBody});
+}
+
+export async function postAbsMsg({db, roomId, userId, msgBody}: any): Promise<Msg>
+{
     const now: Date = new Date(Date.now());
 
     const msg: Msg = {
-        text: msgBody,
+        body: msgBody,
         belongsTo: roomId,
         lastModifiedAt: now,
         issuedDate: now,
@@ -188,14 +252,14 @@ export async function roomIssuedDate({db, roomId}: any): Promise<Date>
     }
 }
 
-export async function destroyMsg({db, msgId}: any): Promise<void>
-{
-    await db.collection(msgCollecName).deleteOne({_id: msgId});
-}
+// export async function destroyMsg({db, msgId}: any): Promise<void>
+// {
+//     await db.collection(msgCollecName).deleteOne({_id: msgId});
+// }
 
 export async function msgBodyText({db, id}: any): Promise<string>
 {
-    const queryResult: {text: string}[] = await db.collection(msgCollecName)
+    const queryResult: {body: MsgBody}[] = await db.collection(msgCollecName)
         .find({
             _id: id
         })
@@ -205,14 +269,35 @@ export async function msgBodyText({db, id}: any): Promise<string>
         })
         .toArray();
 
+    // When there's a msg, and the type is text, return it.
     if ( queryResult.length == 1 )
     {
-        return queryResult[0].text;
+        const msgBody: MsgBody = queryResult[0].body;
+        if ( msgBody.msgBodyKind == MsgBodyKind.Text )
+        {
+            return (msgBody as MsgBodyText).text;
+        }
     }
-    else
-    {
-        return "";
-    }
+    return ""; // Otherwise, just return empty one.
+}
+
+// todo
+export async function msgBody({db, id}: any): Promise<MsgBody>
+{
+    const queryResult: {body: MsgBody}[] = await db.collection(msgCollecName)
+        .find({
+            _id: id
+        })
+        .project({
+            _id: 0,
+            text: 1,
+        })
+        .toArray();
+    console.assert(queryResult.length == 1);
+
+    // When there's a msg, and the type is text, return it.
+    const msgBody: MsgBody = queryResult[0].body;
+    return msgBody;
 }
 
 export async function msgLastModifiedAt({db, id}: any): Promise<Date>
@@ -389,4 +474,9 @@ export async function incBlobRefCount({db, id, amount = 1}: any): Promise<void>
             {$inc: {refCount: amount}},
         );
     await checkDeleteBlob({db, id});
+}
+
+export function downloadableBlobUrl(id: Id): string
+{
+    return `https://hellmen.s3.ap-northeast-2.amazonaws.com/${id.toString()}`;
 }

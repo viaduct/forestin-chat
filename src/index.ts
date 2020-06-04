@@ -8,9 +8,13 @@ import depthLimit from "graphql-depth-limit";
 import {createComplexityLimitRule} from "graphql-validation-complexity";
 import * as Op from "./lib";
 import {GraphQLUpload as GraphqlUpload} from "graphql-upload";
+import Aws from "aws-sdk";
 
 async function main()
 {
+    const credentialPath = "forestin-credentials.json";
+    Aws.config.loadFromPath(credentialPath);
+    const s3 = new Aws.S3({apiVersion: "latest"});
     const expressApp = Express();
     const mongoUrl = "mongodb://localhost:31234";
     const redisOptions: Redis.RedisOptions = {
@@ -37,6 +41,8 @@ async function main()
             id: ID!
             mime: String!
             issuedDate: String!
+            isReady: Boolean!
+            refCount: Int!
         }
         type Room {
             id: ID!
@@ -44,14 +50,24 @@ async function main()
             lastPostedAt: String!
             issuedDate: String!
         }
-        enum MsgKind{
+        enum MsgBodyKind{
             TEXT
             BLOB
         }
+        interface MsgBody {
+            msgBodyKind: MsgBodyKind!
+        }
+        type MsgBodyText {
+            text: String!
+        }
+        type MsgBodyBlob {
+            url: String!
+            mime: String!
+        }
         type Msg {
             id: ID!
-            kind: MsgKind!
-            bodyText: String! # TODO: not just bodyText, but any union type.
+            body: MsgBody!
+            bodyText: String!
             lastModifiedAt: String!
             issuedDate: String!
             author: String!
@@ -64,6 +80,7 @@ async function main()
             destroyRoom(id: ID!): Void
             destroyRooms(ids: [ID!]!): Void
             postMsg(roomId: ID!, userId: ID!, bodyText: String!): Msg
+            postBlobMsg(roomId: ID!, userId: ID!, blob: Upload!): Msg
         }
     `;
     const apolloResolvers = {
@@ -112,6 +129,20 @@ async function main()
 
                 return msg;
             },
+            postBlobMsg: async (parent: any, params: any, context: any)=>{
+                const {roomId, userId, blob} = params;
+                const {mimetype, createReadStream} = await blob;
+                const msg: Op.Msg = await Op.uploadAndPostBlobMsg({
+                    db: context.mongoDb,
+                    s3: context.s3,
+                    roomId: roomId,
+                    userId: userId,
+                    mime: mimetype,
+                    stream: createReadStream(),
+                });
+
+                return msg;
+            },
         },
         Room: {
             members: async (parent: any, params: any, context: any)=>{
@@ -141,6 +172,9 @@ async function main()
                 });
                 return text;
             },
+            body: async (parent: any, params: any, context: any)=>{
+                return await Op.msgBody({db: context.mongoDb, id: parent._id});
+            },
             issuedDate: async (parent: any, params: any, context: any)=>{
                 const date: Date = await Op.msgIssuedDate({
                     db: context.mongoDb,
@@ -163,6 +197,11 @@ async function main()
                 return authorId;
             }
         },
+        MsgBodyBlob: {
+            url: async (parent: any, params: any, context: any)=>{
+                return Op.downloadableBlobUrl(parent._id);
+            },
+        },
         Upload: GraphqlUpload,
     };
     const apolloServer = new ApolloServer({
@@ -175,7 +214,7 @@ async function main()
             })
         ],
         context: async ()=>{
-            return { mongoClient, graphqlPubSub, mongoDb }
+            return { mongoClient, graphqlPubSub, mongoDb, s3};
         },
     });
 
