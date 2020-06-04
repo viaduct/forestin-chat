@@ -32,8 +32,7 @@ async function main()
     const mongoDb = mongoClient.db(mongoDbName);
     const apolloTypeDefs = `
         enum Void {VOID}
-        scalar Upload
-        
+       
         type Image {
             id: ID!
             mime: String!
@@ -47,13 +46,12 @@ async function main()
         }
         enum MsgKind{
             TEXT
-            IMAGE
-            VIDEO
+            BLOB
         }
         type Msg {
             id: ID!
-            kind: MsgKind
-            bodyText: String! // TODO: not just bodyText, but any union type.
+            kind: MsgKind!
+            bodyText: String! # TODO: not just bodyText, but any union type.
             lastModifiedAt: String!
             issuedDate: String!
             author: String!
@@ -66,9 +64,7 @@ async function main()
             destroyRoom(id: ID!): Void
             destroyRooms(ids: [ID!]!): Void
             postMsg(roomId: ID!, userId: ID!, bodyText: String!): Msg
-            createBlobMsg(roomId: ID!, userId: ID!, blob: Upload!):  
         }
-        
     `;
     const apolloResolvers = {
         Query: {

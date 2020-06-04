@@ -1,4 +1,5 @@
 import Mongo from "mongodb";
+import Aws from "aws-sdk";
 
 type Id = Mongo.ObjectId;
 interface MongoObj
@@ -19,8 +20,18 @@ export interface Msg extends MongoObj
     issuedDate?: Date;
     author?: string;
 }
+export interface Blob extends MongoObj
+{
+    mime: string;
+    issuedDate: Date;
+    refCount: number;
+    isReady: boolean;
+}
+
+export const blobsS3BucketName = "hellmen";
 export const roomCollecName = "Rooms";
 export const msgCollecName = "Msgs";
+export const blobsCollecName = "Blobs";
 
 export async function createRoom({db}: any): Promise<Room>
 {
@@ -268,4 +279,114 @@ export async function msgAuthor({db, id}: any): Promise<string>
     {
         return "";
     }
+}
+
+export async function registerBlob({db, mime}: any): Promise<Blob>
+{
+    /*
+        mime: string;
+    issuedDate: Date;
+    refCount: number;
+    isReady: boolean;
+
+     */
+    const now = new Date(Date.now());
+
+    const blob = {
+        mime: mime,
+        issuedDate: now,
+        refCount: 0,
+        isReady: false,
+    } as Blob;
+
+    const insertionResult =
+        await db
+            .collection(blobsCollecName)
+            .insertOne(blob);
+
+    blob.id = insertionResult.insertedId;
+
+    return blob;
+}
+
+export async function deregisterBlob({db, id}: any): Promise<void>
+{
+    await db
+        .collection(blobsCollecName)
+        .deleteOne({
+            _id: id,
+        });
+}
+
+function mimeToExtension(mime: string): string
+{
+    switch ( mime )
+    {
+        case "image/jpeg":
+            return "jpeg";
+        case "image/png":
+            return "png";
+        default:
+            throw `Unexpected mime type, which is "${mime}".`;
+    }
+}
+
+export async function uploadBlob({db, s3, id, stream}: any): Promise<void>
+{
+    // Get mime.
+    const queryResult = await db
+        .collection(blobsCollecName)
+        .find({_id: id})
+        .project({_id: 0, mime: 1})
+        .toArray();
+    console.assert(queryResult.length == 1);
+    const mime = queryResult[0].mime;
+
+    const s3Params = {
+        Bucket: blobsS3BucketName,
+        Key: `${id.toString()}.${mimeToExtension(mime)}`,
+        Body: stream.PassThrough(),
+        ContentType: mime,
+    }
+    await s3.putObject(s3Params).promise();
+
+    await db
+        .collection(blobsCollecName)
+        .updateOne(
+            {
+                _id: id,
+            },
+            {
+                $set: {isReady: true},
+            },
+        );
+}
+
+export async function checkDeleteBlob({db, id}: any): Promise<void>
+{
+    const findResult = await db
+        .collection(blobsCollecName)
+        .find({_id: id})
+        .project({_id: 0, refCount: 1})
+        .toArray();
+    console.assert(findResult.length == 1);
+
+    if ( findResult[0].refCount == 0 )
+    {
+        await db
+            .collection(blobsCollecName)
+            .deleteOne({_id: id});
+    }
+    // ... else nothing to do.
+}
+
+export async function incBlobRefCount({db, id, amount = 1}: any): Promise<void>
+{
+    await db
+        .collection(blobsCollecName)
+        .updateOne(
+            {_id: id},
+            {$inc: {refCount: amount}},
+        );
+    await checkDeleteBlob({db, id});
 }
